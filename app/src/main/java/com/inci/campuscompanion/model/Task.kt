@@ -1,3 +1,13 @@
 package com.inci.campuscompanion.model
 
-data class Task(val id:Int, val title: String, val description: String, val isCompleted: Boolean)
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity(tableName = "tasks")
+data class Task(
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
+    val title: String,
+    val description: String,
+    val isCompleted: Boolean = false
+)
