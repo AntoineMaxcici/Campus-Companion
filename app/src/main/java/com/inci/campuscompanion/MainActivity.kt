@@ -4,6 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,28 +16,65 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.inci.campuscompanion.data.AppDatabase
+import com.inci.campuscompanion.data.TaskRepository
+import com.inci.campuscompanion.data.UserPreferencesRepository
+import com.inci.campuscompanion.data.dataStore
 import com.inci.campuscompanion.model.Task
+import com.inci.campuscompanion.ui.MainViewModel
 import com.inci.campuscompanion.ui.theme.CampusCompanionTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val database = AppDatabase.getDatabase(applicationContext)
+        val taskRepository = TaskRepository(database.taskDao())
+        val preferencesRepository = UserPreferencesRepository(dataStore)
+
+        val viewModel: MainViewModel by viewModels {
+            MainViewModel.Factory(preferencesRepository, taskRepository)
+        }
+
         setContent {
-            CampusCompanionTheme {
+            val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+            val tasks by viewModel.tasks.collectAsStateWithLifecycle()
+
+            CampusCompanionTheme(darkTheme = isDarkMode) {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    TaskScreen(modifier = Modifier.padding(innerPadding))
+                    TaskScreen(
+                        isDarkMode = isDarkMode,
+                        onToggleDarkMode = { viewModel.toggleDarkMode(it) },
+                        tasks = tasks,
+                        onToggleTask = { viewModel.toggleTaskCompletion(it) },
+                        onAddTask = { title, description -> viewModel.upsertTask(title, description) },
+                        modifier = Modifier.padding(innerPadding)
+                    )
                 }
             }
         }
@@ -42,24 +82,124 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TaskScreen(modifier: Modifier = Modifier) {
-    val tasks = remember {
-        mutableStateListOf(
-            Task(1, "Task 1", "Description 1", false),
-            Task(2, "Task 2", "Description 2", false),
-            Task(3, "Task 3", "Description 3", false)
-        )
-    }
+fun TaskScreen(
+    isDarkMode: Boolean,
+    onToggleDarkMode: (Boolean) -> Unit,
+    tasks: List<Task>,
+    onToggleTask: (Task) -> Unit,
+    onAddTask: (String, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
 
-    TaskList(
-        tasks = tasks,
-        onToggleTask = { taskToToggle ->
-            val index = tasks.indexOfFirst { it.id == taskToToggle.id }
-            if (index != -1) {
-                tasks[index] = tasks[index].copy(isCompleted = !tasks[index].isCompleted)
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Dark Mode",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Switch(
+                    checked = isDarkMode,
+                    onCheckedChange = onToggleDarkMode
+                )
+            }
+
+            HorizontalDivider()
+
+            if (tasks.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No tasks yet. Tap + to add one!",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            } else {
+                TaskList(
+                    tasks = tasks,
+                    onToggleTask = onToggleTask,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        FloatingActionButton(
+            onClick = { showAddDialog = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Icon(imageVector = Icons.Default.Add, contentDescription = "Add Task")
+        }
+
+        if (showAddDialog) {
+            AddTaskDialog(
+                onDismiss = { showAddDialog = false },
+                onConfirm = { title, description ->
+                    onAddTask(title, description)
+                    showAddDialog = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun AddTaskDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Task") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
-        modifier = modifier
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (title.isNotBlank()) {
+                        onConfirm(title, description)
+                    }
+                }
+            ) {
+                Text("Add")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
     )
 }
 
@@ -121,7 +261,16 @@ fun TaskList(
 @Preview(showBackground = true)
 @Composable
 fun TaskPreview() {
-    CampusCompanionTheme {
-        TaskScreen()
+    CampusCompanionTheme(darkTheme = false) {
+        TaskScreen(
+            isDarkMode = false,
+            onToggleDarkMode = {},
+            tasks = listOf(
+                Task(1, "Task 1", "Description 1", false),
+                Task(2, "Task 2", "Description 2", true)
+            ),
+            onToggleTask = {},
+            onAddTask = { _, _ -> }
+        )
     }
 }
